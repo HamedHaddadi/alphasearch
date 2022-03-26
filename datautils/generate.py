@@ -199,6 +199,9 @@ class IEXCloud:
 #   yahoo finance                
 # ########################################## #
 class YahooFinance:
+    """
+    Using YFinance to generate data
+    """
 
     def __init__(self, data_type, data_value):
         setattr(self, data_type, data_value)
