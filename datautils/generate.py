@@ -1,6 +1,10 @@
 import pandas as pd
 import pandas_datareader.data as web
+from pandas_datareader.nasdaq_trader import get_nasdaq_symbols 
+import yfinance as yf 
+from natsort import natsorted 
 from os import path, makedirs
+from .. utils import tools 
 import matplotlib.pyplot as plt
 from datetime import datetime, date 
 import sys
@@ -187,17 +191,74 @@ class IEXCloud:
             return all_data 
     
     @staticmethod
-    def _to_hdf(data_df, save_path, file_name, key):
-        file_name += '.h5'
-        if not path.exists(save_path):
-            makedirs(save_path)
-        data_df.to_hdf(path.join(save_path, file_name), key)
-    
-    @staticmethod
     def _pass(*args, **kwargs):
-        pass 
+        pass
 
+# ########################################## #
+# EquityNasdaq: historical equity data from 
+#   yahoo finance                
+# ########################################## #
+class YahooFinance:
 
+    def __init__(self, data_type, data_value):
+        setattr(self, data_type, data_value)
+    
+    @classmethod
+    def generate_nasdaq_metadata(cls, assets = 'all', save_path=None):
+        """
+        include options: 
+            all -> all equities included
+            eft -> only etfs
+            no-etf -> efts excluded
+        """
+        nasdaq_symbols = get_nasdaq_symbols()
+        _symbols = {'all': nasdaq_symbols, 
+                        'etf': nasdaq_symbols[nasdaq_symbols.ETF], 
+                            'no-etf': nasdaq_symbols[~nasdaq_symbols.ETF]}[assets]
+        yf_symbols = yf.Tickers(_symbols.index.unique().to_list())
+        metadata_frame = []
+        count = 0
+        for ticker, yf_object in natsorted(yf_symbols.tickers.items()):
+            metadata_frame.append(pd.Series(yf_object.get_info()).to_frame(ticker))
+            count += 1
+        metadata_frame = pd.concat(metadata_frame , axis = 1).dropna(how = 'all').T
+        metadata_frame = metadata_frame.apply(pd.to_numeric, errors = 'ignore')
+        if save_path is not None:
+            file_name = 'Nasdaq_metadata_' + date.today().strftime('%Y-%M-%d')
+            tools.save_to_hdf(metadata_frame, save_path, file_name, 'YF')
+        return cls('nasdaq_metadata', metadata_frame)
+    
+    @staticmethod 
+    def generate_chunk(iterable, chunk_size):
+        for i in range(0, len(iterable), chunk_size):
+            yield iterable[i:i+chunk_size]
+    
+    @classmethod 
+    def generate_asset_history(cls, asset_symbols = 'nasdaq', save_path = None, history_period = 'max'):
+        """
+        assets can be a list, or 'all';
+        if 'all' the entire nasdaq assets will be downloaded
+        history: period to look back; 'max' lists the entire hostory
+        """
+        if isinstance(asset_symbols, list):
+            assets = asset_symbols
+            chunk_size = 1
+        else:
+            assets = {'nasdaq': get_nasdaq_symbols}[asset_symbols]()  
+            chunk_size = 100      
+
+        history_frame = []
+        for chunk in YahooFinance.generate_chunk(assets, chunk_size):
+            print('downloading the first chunk of data containing ', len(chunk), ' assets ...')
+            history_frame.append(yf.download(tickers = chunk, period = history_period, thread=True))
+        history_frame = pd.concat(history_frame).dropna(how='all', axis = 1)
+        if save_path is not None:
+            file_name = asset_symbols.upper() + '_History_Within_' +\
+                 history_period + date.today().strftime('%Y-%M-%d')
+            tools.save_to_hdf(history_frame, save_path, file_name, 'HF')
+        return cls('asset_history', history_frame)
+
+    
 # ################################################### #
 # ##########        Useful functions      ########### #
 # ################################################### #

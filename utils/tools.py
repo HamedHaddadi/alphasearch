@@ -16,6 +16,7 @@ def generate_RGB(number):
                 (1/255)*np.random.randint(0, 255)) for num in range(number)]
 
 def save_to_hdf(data_frame, save_path, file_name, key):
+    file_name += '.h5'
     if not path.exists(save_path):
         makedirs(save_path)
     data_frame.to_hdf(path.join(save_path, file_name), key = key)
