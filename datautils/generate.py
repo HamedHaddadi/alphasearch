@@ -4,6 +4,7 @@ from pandas_datareader.nasdaq_trader import get_nasdaq_symbols
 import yfinance as yf 
 from natsort import natsorted 
 from os import path, makedirs
+from typing import overload 
 from .. utils import tools 
 import matplotlib.pyplot as plt
 from datetime import datetime, date 
@@ -202,10 +203,15 @@ class YahooFinance:
     """
     Using YFinance to generate data
     """
-
-    def __init__(self, data_type, data_value):
-        setattr(self, data_type, data_value)
+    def __init__(self, *args):
+        attr_name, attr_value = args
+        setattr(self, attr_name, attr_value)
     
+    @staticmethod 
+    def generate_chunk(iterable, chunk_size):
+        for i in range(0, len(iterable), chunk_size):
+            yield iterable[i:i+chunk_size]    
+        
     @classmethod
     def generate_nasdaq_metadata(cls, assets = 'all', save_path=None):
         """
@@ -231,35 +237,42 @@ class YahooFinance:
             tools.save_to_hdf(metadata_frame, save_path, file_name, 'YF')
         return cls('nasdaq_metadata', metadata_frame)
     
-    @staticmethod 
-    def generate_chunk(iterable, chunk_size):
-        for i in range(0, len(iterable), chunk_size):
-            yield iterable[i:i+chunk_size]
-    
     @classmethod 
-    def generate_asset_history(cls, asset_symbols = 'nasdaq', save_path = None, history_period = 'max'):
+    def generate_asset_history(cls, symbols = 'nasdaq',
+                 save_path = None,
+                     history_period = 'max', save_format = 'pickle', 
+                        groupby = 'ticker', drop_nan = False):
         """
         assets can be a list, or 'all';
         if 'all' the entire nasdaq assets will be downloaded
-        history: period to look back; 'max' lists the entire hostory
+        history: period to look back; 'max' lists the entire history
+            other options for history:
+                1m ,2m, 15m, 30m, 90m
         """
-        if isinstance(asset_symbols, list):
-            assets = asset_symbols
-            chunk_size = 1
+        if isinstance(symbols, list):
+            file_stem = 'Yahoo_Finance_Asset_List_'
+            assets = symbols
+            chunk_size = {True: 100, False:len(symbols)}[(len(symbols) >= 100)]
         else:
-            assets = {'nasdaq': get_nasdaq_symbols}[asset_symbols]()  
+            file_stem = 'All_Nasdaq_'
+            assets = {'nasdaq': get_nasdaq_symbols}[symbols]()  
             chunk_size = 100      
 
         history_frame = []
         for chunk in YahooFinance.generate_chunk(assets, chunk_size):
             print('downloading the first chunk of data containing ', len(chunk), ' assets ...')
-            history_frame.append(yf.download(tickers = chunk, period = history_period, thread=True))
-        history_frame = pd.concat(history_frame).dropna(how='all', axis = 1)
+            history_frame.append(yf.download(tickers = chunk, period = history_period,
+                groupby = groupby, thread=True))
+        if drop_nan:
+            history_frame = pd.concat(history_frame).dropna(how='all', axis = 1)
+        else:
+            history_frame = pd.concat(history_frame)
         if save_path is not None:
-            file_name = asset_symbols.upper() + '_History_Within_' +\
+            file_name = file_stem + '_History_Within_' +\
                  history_period + date.today().strftime('%Y-%M-%d')
-            tools.save_to_hdf(history_frame, save_path, file_name, 'HF')
-        return cls('asset_history', history_frame)
+            {'pickle':tools.save_to_pickle, 
+                'hdf': tools.save_to_hdf}[save_format](history_frame, save_path, file_name)          
+        return cls('assets_history', history_frame)
 
     
 # ################################################### #
@@ -329,6 +342,8 @@ def etf_price_history(etfs = None, source = 'yahoo', date_range = ('01-01-2010',
     etf = etf.loc[:, idx[use_column, :]]
     etf.columns = etf.columns.droplevel(0)
     return etf 
+
+
 
 
 

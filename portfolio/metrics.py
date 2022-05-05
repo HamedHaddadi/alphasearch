@@ -1,13 +1,16 @@
 
 
+from ssl import ALERT_DESCRIPTION_UNSUPPORTED_EXTENSION
 import pandas as pd 
 from datetime import datetime, timedelta, date
 from os import path 
-from ..datautils.generate import IEXCloud, stock_history_from_iex, etf_price_history, get_sp500, stock_history_yahoo 
+from ..datautils.generate import IEXCloud, YahooFinance, stock_history_from_iex, etf_price_history, get_sp500, stock_history_yahoo 
 from datetime import date 
+import matplotlib
+import matplotlib.pyplot as plt 
 import sys
 
-class MomentumMetrics:
+class PerformMetrics:
     """
     class to compute momentum metrics for an asset or group of assets
     The best way to use the class is in a notebook. 
@@ -23,6 +26,17 @@ class MomentumMetrics:
         self.assets = assets
         self.tickers= tickers
         self.benchmark = None
+        self.pct_changes = {}
+    
+    @property
+    def assets_are(self):
+        print('available asset data are', self.assets.columns)
+        return self.assets.columns 
+    
+    @property
+    def dates(self):
+        print('availbale with the following dates ...', self.assets.index.min(), self.assets.index.max())
+        return self.assets.index.min().strftime('%Y-%m-%d'), self.assets.index.max().strftime('%Y-%m-%d')
         
     def compute_momentum(self, lag_times=[1, 3, 6, 9, 12], start_time = None, sampling = 'monthly', plot = None):
         """
@@ -60,9 +74,8 @@ class MomentumMetrics:
         if plot is specified as a list of tickers, then a plot for each ticker along with its price is generated
         """
         if date_range is None:
-            date_range = (self.assets.index.min().strftime('%Y-%m-%d'),
-                         self.assets.index.max().strftime('%Y-%m-%d'))
-        assets = MomentumMetrics.choose_dates(self.assets, date_range)
+            date_range = self.dates
+        assets = PerformMetrics.choose_dates(self.assets, date_range)
         # screen the frame for start .. end range
         price_change = assets.pct_change()
         mean_gain = price_change[price_change > 0].fillna(0).rolling(period).mean().dropna()
@@ -87,7 +100,7 @@ class MomentumMetrics:
 
     def compute_bollinger(self, period = 20, k = 2, date_range = ('2018-01-01', '2021-01-01')):
         
-        assets = MomentumMetrics.choose_dates(self.assets, date_range)
+        assets = PerformMetrics.choose_dates(self.assets, date_range)
         middle_df = assets.apply(self._bollinger_middle ,axis = 0, period = period).dropna()
         upper_df = assets.apply(self._bollinger_upper, axis = 0, period = period, k = k).dropna()
         lower_df = assets.apply(self._bollinger_lower, axis = 0, period = period, k = k).dropna()
@@ -118,6 +131,69 @@ class MomentumMetrics:
     
     def ticker_valid(self, ticker):
         return ticker in self.momentum.columns 
+    
+    # performance metrics of single assets
+    # percentage change
+    def get_pct_change(self, asset, sampling = 'M'):
+        return self.assets[asset].resample(sampling).last().pct_change().dropna()
+    
+    def pct_change(self, assets= None,
+             sampling = 'M',
+                 date_range = None, plot = 'bar', bins = 80):
+        """
+        computes percentage change asset by asset to avoid dropna
+        """
+        if date_range is None:
+            date_range = self.dates   
+
+        for count,asset in enumerate(assets):
+            pct_change = self.get_pct_change(asset, sampling = sampling).to_frame()
+            pct_change.column = ['pct_change']
+
+            if asset not in self.pct_changes.keys():
+                self.pct_changes[asset] = pct_change
+                self.cumulative_return[asset] = (1 + pct_change['pct_change']).cumprod() -1
+            else:
+                print('ticker ', asset, ' found in dictionary; the old one replaces with a new one')
+                self.pct_changes[asset] = pct_change 
+                self.cumulative_return[asset] = (1 + pct_change['pct_change']).cumprod() -1
+                
+        if plot is not None: 
+            fig, axs = plt.subplots(nrows = len(assets), ncols = 1, figsize=(8, 8*len(assets)))
+            if len(assets) > 1:
+                axs = axs.ravel()
+            else:
+                axs = axs
+
+            for count,pct_data in enumerate(self.pct_changes.items()):
+                key, pct = pct_data[0], pct_data[1]
+                if len(assets) > 1:
+                    ax = axs[count]
+                else:
+                    ax = axs
+                if plot == 'line':
+                    pct.plot(kind = 'line', ax = ax, use_index = True,
+                        xlabel='Date', ylabel='percent change',
+                        fontsize = 20, linewidth = 2)
+                elif plot == 'bar':
+                    pct.plot.hist(grid = True, bins = bins, ax = ax)
+
+            plt.show()
+            return fig, axs
+    
+    
+    def annualized_sharpe(self, asset = None, annualize = 'D'):
+        """
+        D: daily annualized
+        M: monthly annualized
+        W: weekly annualized
+        """
+        annual = {'D': 252,
+                 'M': 12,
+                     'W': 52}[annualize]
+        
+
+         
     
     # factory methods for dataframe generation from various sources
     @classmethod
@@ -172,6 +248,10 @@ class MomentumMetrics:
             history = history, use_columns = use_columns, save_path = save_path)         
         return cls(assets, tickers = tickers)
     
-
-
-
+    @classmethod 
+    def pull_assets_yfinance(cls, tickers = None, price_point = 'Close', history='max', save_path = None, save_format = 'pickle'):
+        assets = YahooFinance.generate_asset_history(symbols = tickers, save_path = save_path, 
+            history_period = history, save_format = save_format, groupby = 'ticker', drop_nan = False).assets_history
+        assets = assets[price_point]
+        return cls(assets, tickers = tickers)
+    
